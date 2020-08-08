@@ -106,5 +106,7 @@ unsigned char checkRootHubConnections();
 
 void resetHubDevices(unsigned char hubindex);
 void pollHIDdevice();
+void FTDIReceive();
+void FTDISend();
 
 #endif

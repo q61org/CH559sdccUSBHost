@@ -18,6 +18,11 @@ __code unsigned char SetupSetUsbConfig[] = { USB_REQ_TYP_OUT, USB_SET_CONFIGURAT
 __code unsigned char  SetHIDIdleRequest[] = {USB_REQ_TYP_CLASS | USB_REQ_RECIP_INTERF, HID_SET_IDLE, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
 __code unsigned char  GetHIDReport[] = {USB_REQ_TYP_IN | USB_REQ_RECIP_INTERF, USB_GET_DESCRIPTOR, 0x00, USB_DESCR_TYP_REPORT, 0 /*interface*/, 0x00, 0xff, 0x00};
 
+#define FTDI_SIO_SET_BAUD_RATE          3
+#define FTDI_SIO_SET_LATENCY_TIMER      9
+__code unsigned char FTDISetBaudRateRequest[] = { USB_REQ_TYP_OUT | USB_REQ_TYP_VENDOR, FTDI_SIO_SET_BAUD_RATE, 0x00, 0x00, 0x00 };
+__code unsigned char FTDISetLatencyTimerRequest[] = { USB_REQ_TYP_OUT | USB_REQ_TYP_VENDOR, FTDI_SIO_SET_LATENCY_TIMER, 0x00 };
+
 __at(0x0000) unsigned char __xdata RxBuffer[MAX_PACKET_SIZE];
 __at(0x0100) unsigned char __xdata TxBuffer[MAX_PACKET_SIZE];
 
@@ -257,7 +262,7 @@ unsigned char hostCtrlTransfer(unsigned char __xdata *DataBuf, unsigned short *R
 	unsigned char s, RxLen, i;
 	unsigned char __xdata *pBuf;
 	unsigned short *pLen;
-	DEBUG_OUT("hostCtrlTransfer\n");
+	DEBUG_OUT(">> hostCtrlTransfer\n");
 	PXUSB_SETUP_REQ pSetupReq = ((PXUSB_SETUP_REQ)TxBuffer);
 	pBuf = DataBuf;
 	pLen = RetLen;
@@ -275,7 +280,7 @@ unsigned char hostCtrlTransfer(unsigned char __xdata *DataBuf, unsigned short *R
 	{ 
 		if (pSetupReq->bRequestType & USB_REQ_TYP_IN)
 		{
-			DEBUG_OUT("Remaining bytes to read %d\n", RemLen);
+			DEBUG_OUT(">> Remaining bytes to read %d\n", RemLen);
 			while (RemLen)
 			{
 				delayUs(300);
@@ -289,7 +294,7 @@ unsigned char hostCtrlTransfer(unsigned char __xdata *DataBuf, unsigned short *R
 				for(i = 0; i < RxLen; i++)
 					pBuf[i] = RxBuffer[i];
 				pBuf += RxLen;
-				DEBUG_OUT("Received %i bytes\n", (uint16_t)USB_RX_LEN);
+				DEBUG_OUT(">> Received %i bytes\n", (uint16_t)USB_RX_LEN);
 				if (USB_RX_LEN == 0 || (USB_RX_LEN < endpoint0Size ))
 					break; 
 			}
@@ -297,7 +302,7 @@ unsigned char hostCtrlTransfer(unsigned char __xdata *DataBuf, unsigned short *R
 		}
 		else
 		{
-			DEBUG_OUT("Remaining bytes to write %i", RemLen);
+			DEBUG_OUT(">> Remaining bytes to write %i", RemLen);
 			//todo rework this TxBuffer overwritten
 			while (RemLen)
 			{
@@ -310,9 +315,9 @@ unsigned char hostCtrlTransfer(unsigned char __xdata *DataBuf, unsigned short *R
 					SetPort = SetPort ^ 1 ? 1 : 0;
 					*pBuf = SetPort;
 
-					DEBUG_OUT("SET_PORT  %02X  %02X ", *pBuf, SetPort);
+					DEBUG_OUT(">> SET_PORT  %02X  %02X ", *pBuf, SetPort);
 				}
-				DEBUG_OUT("Sending %i bytes\n", (uint16_t)UH_TX_LEN);
+				DEBUG_OUT(">> Sending %i bytes\n", (uint16_t)UH_TX_LEN);
 				s = hostTransfer(USB_PID_OUT << 4, UH_TX_CTRL, 10000);
 				if (s != ERR_SUCCESS)
 					return (s);
@@ -336,10 +341,10 @@ unsigned char hostCtrlTransfer(unsigned char __xdata *DataBuf, unsigned short *R
 void fillTxBuffer(PUINT8C data, unsigned char len)
 {
 	unsigned char i;
-	DEBUG_OUT("fillTxBuffer %i bytes\n", len);
+	DEBUG_OUT(">> fillTxBuffer %i bytes\n", len);
 	for(i = 0; i < len; i++)
 		TxBuffer[i] = data[i];
-	DEBUG_OUT("fillTxBuffer done\n", len);
+	DEBUG_OUT(">> fillTxBuffer done\n", len);
 }
 
 unsigned char getDeviceDescriptor()
@@ -410,6 +415,16 @@ void DEBUG_OUT_USB_BUFFER(unsigned char __xdata *usbBuffer)
 {
 	int i;
 	for(i = 0; i < usbBuffer[0]; i++)
+	{
+		DEBUG_OUT("0x%02X ", (uint16_t)(usbBuffer[i]));
+	}
+	DEBUG_OUT("\n");
+}
+
+void DEBUG_OUT_USB_BUFFER_LEN(unsigned char __xdata *usbBuffer, uint8_t len)
+{
+	int i;
+	for(i = 0; i < len; i++)
 	{
 		DEBUG_OUT("0x%02X ", (uint16_t)(usbBuffer[i]));
 	}
@@ -511,6 +526,16 @@ struct
 
 struct 
 {
+	uint8_t connected;
+	uint8_t rootHub;
+	uint8_t ep_in;
+	uint8_t ep_out;
+	uint8_t toggle_in;
+	uint8_t toggle_out;
+} __xdata FTDIDevice;
+
+struct 
+{
     unsigned long idVendorL;
     unsigned long idVendorH;
     unsigned long idProductL;
@@ -534,6 +559,7 @@ void resetHubDevices(unsigned char hubindex)
 	HIDdevice[hiddevice].type  = 0;
 	}
 	}
+	FTDIDevice.connected = 0;
 }
 
 void pollHIDdevice()
@@ -559,6 +585,98 @@ void pollHIDdevice()
 	}
 }
 
+void FTDIReceive()
+{
+	 __xdata unsigned char s, len;
+	if (FTDIDevice.connected) {
+		selectHubPort(FTDIDevice.rootHub, 0);
+		s = hostTransfer(USB_PID_IN << 4 | FTDIDevice.ep_in & 0x7f, FTDIDevice.toggle_in ? bUH_R_TOG | bUH_T_TOG : 0, 0);
+		if (s == ERR_SUCCESS) {
+			FTDIDevice.toggle_in ^= 1;
+			len = USB_RX_LEN;
+			if (len > 2) {
+				DEBUG_OUT("FTDI recv: rcvd %d bytes data: ", len);
+				DEBUG_OUT_USB_BUFFER_LEN(RxBuffer, len);
+			}
+		} else if (s != 42) {
+			DEBUG_OUT("FTDI recv: error %d\n", s);
+		}
+	}
+}
+
+void FTDISend()
+{
+	static uint8_t s_data = 0x20;
+	 __xdata unsigned char s, len;
+	if (FTDIDevice.connected) {
+		selectHubPort(FTDIDevice.rootHub, 0);
+		TxBuffer[0] = s_data++;
+		TxBuffer[1] = s_data++;
+		UH_TX_LEN = 2;
+		s = hostTransfer(USB_PID_OUT << 4 | FTDIDevice.ep_out & 0x7f, FTDIDevice.toggle_out ? bUH_R_TOG | bUH_T_TOG : 0, 0);
+		if (s == ERR_SUCCESS) {
+			FTDIDevice.toggle_out ^= 1;
+			len = UH_TX_LEN;
+			DEBUG_OUT("FTDI send: sent %d bytes data: ", len);
+			DEBUG_OUT_USB_BUFFER_LEN(TxBuffer, len);
+			if (s_data == 0x60) s_data = 0x20;
+		} else if (s != 42) {
+			DEBUG_OUT("FTDI send: error %d\n", s);
+		}
+	}
+}
+
+unsigned char FTDISetBaudRate(uint32_t baud)
+{
+	uint16_t baud_value, baud_index = 0;
+	uint32_t divisor3 = 48000000 / 2 / baud;
+	static const uint8_t divfrac [8] = {0, 3, 2, 0, 1, 1, 2, 3};
+    static const uint8_t divindex[8] = {0, 0, 0, 1, 0, 1, 1, 1};
+
+    baud_value = divisor3 >> 3;
+    baud_value |= divfrac [divisor3 & 0x7] << 14;
+    baud_index = divindex[divisor3 & 0x7];
+
+    /* Deal with special cases for highest baud rates. */
+    if(baud_value == 1) baud_value = 0;
+    else // 1.0
+        if(baud_value == 0x4001) baud_value = 1; // 1.5
+	
+	DEBUG_OUT("FTDISetBaudRate: baud=%ld value=%d index=%d\n", baud, baud_value, baud_index);
+
+	unsigned short len;
+	fillTxBuffer(FTDISetBaudRateRequest, sizeof(FTDISetBaudRateRequest));
+	TxBuffer[2] = baud_value & 0x0ff;
+	TxBuffer[3] = baud_value >> 8;
+	TxBuffer[4] = baud_index & 0x0ff;
+	
+	selectHubPort(FTDIDevice.rootHub, 0);
+	unsigned char s = hostCtrlTransfer(receiveDataBuffer, &len, 0);
+	if (s == ERR_SUCCESS) {
+		DEBUG_OUT("FTDISetBaudRate: success.\n");
+	} else {
+		DEBUG_OUT("FTDISetBaudRate: error %d\n", s);
+	}
+	return s;
+}
+
+unsigned char FTDISetLatencyTimer(uint8_t timer)
+{
+	DEBUG_OUT("FTDISetLatencyTimer: %d\n", timer);
+
+	unsigned short len;
+	fillTxBuffer(FTDISetLatencyTimerRequest, sizeof(FTDISetLatencyTimerRequest));
+	TxBuffer[2] = timer;
+	
+	selectHubPort(FTDIDevice.rootHub, 0);
+	unsigned char s = hostCtrlTransfer(receiveDataBuffer, &len, 0);
+	if (s == ERR_SUCCESS) {
+		DEBUG_OUT("FTDISetLatencyTimer: success.\n");
+	} else {
+		DEBUG_OUT("FTDISetLatencyTimer: error %d\n", s);
+	}
+	return s;
+}
 
 void parseHIDDeviceReport(unsigned char __xdata *report, unsigned short length, unsigned char CurrentDevive)
 {
@@ -754,6 +872,8 @@ void readInterface(unsigned char rootHubIndex, PXUSB_ITF_DESCR interface)
 	DEBUG_OUT("  Class %d\n", interface->bInterfaceClass);
 	DEBUG_OUT("  Sub Class %d\n", interface->bInterfaceSubClass);
 	DEBUG_OUT("  Interface Protocol %d\n", interface->bInterfaceProtocol);
+	DEBUG_OUT("  Alternate Setting %d\n", interface->bAlternateSetting);
+	DEBUG_OUT("  Endpoint Count %d\n", interface->bNumEndpoints);
 }
 
 void readHIDInterface(PXUSB_ITF_DESCR interface, PXUSB_HID_DESCR descriptor)
@@ -805,6 +925,7 @@ unsigned char initializeRootHubConnection(unsigned char rootHubIndex)
     		VendorProductID[rootHubIndex].idVendorH = ((PXUSB_DEV_DESCR)receiveDataBuffer)->idVendorH;
     		VendorProductID[rootHubIndex].idProductL = ((PXUSB_DEV_DESCR)receiveDataBuffer)->idProductL;
     		VendorProductID[rootHubIndex].idProductH = ((PXUSB_DEV_DESCR)receiveDataBuffer)->idProductH;
+			DEBUG_OUT( "VID/PID: %02x%02x/%02x%02x\n", receiveDataBuffer[9], receiveDataBuffer[8], receiveDataBuffer[11], receiveDataBuffer[10]);
 			DEBUG_OUT_USB_BUFFER(receiveDataBuffer);
 			addr = rootHubIndex + ((PUSB_SETUP_REQ)SetUSBAddressRequest)->wValueL; //todo wValue always 2.. does another id work?
 			s = setUsbAddress(addr);
@@ -875,6 +996,28 @@ unsigned char initializeRootHubConnection(unsigned char rootHubIndex)
 											HIDdevice[hiddevice].rootHub = rootHubIndex;
 											DEBUG_OUT("Got endpoint for the HIDdevice 0x%02x\n", HIDdevice[hiddevice].endPoint);
 											getHIDDeviceReport(hiddevice);
+										}
+									} 
+									else if (currentInterface->bInterfaceClass == 255)
+									{
+										PXUSB_ENDP_DESCR d = (PXUSB_ENDP_DESCR)desc;
+										if (d->bEndpointAddress & 0x80) { // IN endpoint
+											DEBUG_OUT("  Endpoint %d direction: IN\n", d->bEndpointAddress & 0x7f);
+											FTDIDevice.ep_in = d->bEndpointAddress;
+											FTDIDevice.connected |= 1;
+										} else {
+											DEBUG_OUT("  Endpoint %d direction: OUT\n", d->bEndpointAddress & 0x7f);
+											FTDIDevice.ep_out = d->bEndpointAddress;
+											FTDIDevice.connected |= 2;
+										}
+										FTDIDevice.rootHub = rootHubIndex;
+										DEBUG_OUT("  Attributes: 0x%02x\n", d->bmAttributes);
+										DEBUG_OUT("  Max packet size: 0x%02x%02x\n", d->wMaxPacketSizeH, d->wMaxPacketSizeL);
+										if (FTDIDevice.connected == 3) {
+											FTDIDevice.toggle_in = 0;
+											FTDIDevice.toggle_out = 0;
+											FTDISetBaudRate(19200);
+											FTDISetLatencyTimer(1);
 										}
 									}
 									break;
@@ -966,3 +1109,4 @@ unsigned char checkRootHubConnections()
 	}
 	return s;
 }
+

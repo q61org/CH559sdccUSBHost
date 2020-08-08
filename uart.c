@@ -33,6 +33,8 @@ void processUart(){
 }
 
 void sendProtocolMSG(unsigned char msgtype, unsigned short length, unsigned char type, unsigned char device, unsigned char endpoint, unsigned char __xdata *msgbuffer){
+	return;
+	#if 0
     unsigned short i;
     putchar(0xFE);	
 	putchar(length);
@@ -50,10 +52,13 @@ void sendProtocolMSG(unsigned char msgtype, unsigned short length, unsigned char
 		putchar(msgbuffer[i]);
 	}
 	putchar('\n');
+	#endif
 }
 
 void sendHidPollMSG(unsigned char msgtype, unsigned short length, unsigned char type, unsigned char device, unsigned char endpoint, unsigned char __xdata *msgbuffer,unsigned char idVendorL,unsigned char idVendorH,unsigned char idProductL,unsigned char idProductH){
-    unsigned short i;
+    return;
+	#if 0
+	unsigned short i;
     putchar(0xFE);	
 	putchar(length);
 	putchar((unsigned char)(length>>8));
@@ -70,4 +75,5 @@ void sendHidPollMSG(unsigned char msgtype, unsigned short length, unsigned char 
 		putchar(msgbuffer[i]);
 	}
 	putchar('\n');
+	#endif
 }

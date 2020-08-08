@@ -32,5 +32,11 @@ void main()
         processUart();
         s = checkRootHubConnections();
         pollHIDdevice();
+        FTDISend();
+        delay(50);
+        FTDIReceive();
+        delay(500);
+        FTDIReceive();
+        delay(500);
     }
 }
