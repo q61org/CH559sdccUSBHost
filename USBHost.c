@@ -347,6 +347,15 @@ void fillTxBuffer(PUINT8C data, unsigned char len)
 	DEBUG_OUT(">> fillTxBuffer done\n", len);
 }
 
+void fillTxBuffer_generic(const uint8_t *data, unsigned char len)
+{
+	unsigned char i;
+	DEBUG_OUT(">> fillTxBuffer_g %i bytes\n", len);
+	for(i = 0; i < len; i++)
+		TxBuffer[i] = data[i];
+	DEBUG_OUT(">> fillTxBuffer_g done\n", len);
+}
+
 unsigned char getDeviceDescriptor()
 {
     unsigned char s;
@@ -585,45 +594,53 @@ void pollHIDdevice()
 	}
 }
 
-void FTDIReceive()
+int8_t FTDIReceive(uint8_t *dst, uint8_t maxlen)
 {
 	 __xdata unsigned char s, len;
-	if (FTDIDevice.connected) {
-		selectHubPort(FTDIDevice.rootHub, 0);
-		s = hostTransfer(USB_PID_IN << 4 | FTDIDevice.ep_in & 0x7f, FTDIDevice.toggle_in ? bUH_R_TOG | bUH_T_TOG : 0, 0);
-		if (s == ERR_SUCCESS) {
-			FTDIDevice.toggle_in ^= 1;
-			len = USB_RX_LEN;
-			if (len > 2) {
-				DEBUG_OUT("FTDI recv: rcvd %d bytes data: ", len);
-				DEBUG_OUT_USB_BUFFER_LEN(RxBuffer, len);
-			}
-		} else if (s != 42) {
-			DEBUG_OUT("FTDI recv: error %d\n", s);
+	if (!FTDIDevice.connected) return -1;
+
+	selectHubPort(FTDIDevice.rootHub, 0);
+	s = hostTransfer(USB_PID_IN << 4 | FTDIDevice.ep_in & 0x7f, FTDIDevice.toggle_in ? bUH_R_TOG | bUH_T_TOG : 0, 0);
+	if (s == ERR_SUCCESS) {
+		FTDIDevice.toggle_in ^= 1;
+		len = USB_RX_LEN;
+		if (len > 2) {
+			DEBUG_OUT("FTDI recv: rcvd %d bytes data: ", len);
+			DEBUG_OUT_USB_BUFFER_LEN(RxBuffer, len);
 		}
+		len -= 2;
+		if (len > maxlen) len = maxlen;
+		for (uint8_t i = 0; i < len; i++) {
+			dst[i] = RxBuffer[2 + i];
+		}
+		return len;
+	} else if (s != 42) {
+		DEBUG_OUT("FTDI recv: error %d\n", s);
+		return -1;
 	}
+	return 0;
 }
 
-void FTDISend()
+int8_t FTDISend(const uint8_t *src, uint8_t len)
 {
-	static uint8_t s_data = 0x20;
-	 __xdata unsigned char s, len;
-	if (FTDIDevice.connected) {
-		selectHubPort(FTDIDevice.rootHub, 0);
-		TxBuffer[0] = s_data++;
-		TxBuffer[1] = s_data++;
-		UH_TX_LEN = 2;
-		s = hostTransfer(USB_PID_OUT << 4 | FTDIDevice.ep_out & 0x7f, FTDIDevice.toggle_out ? bUH_R_TOG | bUH_T_TOG : 0, 0);
-		if (s == ERR_SUCCESS) {
-			FTDIDevice.toggle_out ^= 1;
-			len = UH_TX_LEN;
-			DEBUG_OUT("FTDI send: sent %d bytes data: ", len);
-			DEBUG_OUT_USB_BUFFER_LEN(TxBuffer, len);
-			if (s_data == 0x60) s_data = 0x20;
-		} else if (s != 42) {
-			DEBUG_OUT("FTDI send: error %d\n", s);
-		}
+	 __xdata unsigned char s;
+	if (!FTDIDevice.connected) return -1;
+
+	selectHubPort(FTDIDevice.rootHub, 0);
+	fillTxBuffer_generic(src, len);
+	UH_TX_LEN = len;
+	s = hostTransfer(USB_PID_OUT << 4 | FTDIDevice.ep_out & 0x7f, FTDIDevice.toggle_out ? bUH_R_TOG | bUH_T_TOG : 0, 0);
+	if (s == ERR_SUCCESS) {
+		FTDIDevice.toggle_out ^= 1;
+		len = UH_TX_LEN;
+		DEBUG_OUT("FTDI send: sent %d bytes data: ", len);
+		DEBUG_OUT_USB_BUFFER_LEN(TxBuffer, len);
+		return len;
+	} else if (s != 42) {
+		DEBUG_OUT("FTDI send: error %d\n", s);
+		return -1;
 	}
+	return 0;
 }
 
 unsigned char FTDISetBaudRate(uint32_t baud)
@@ -676,6 +693,11 @@ unsigned char FTDISetLatencyTimer(uint8_t timer)
 		DEBUG_OUT("FTDISetLatencyTimer: error %d\n", s);
 	}
 	return s;
+}
+
+uint8_t FTDIIsConnected()
+{
+	return FTDIDevice.connected;
 }
 
 void parseHIDDeviceReport(unsigned char __xdata *report, unsigned short length, unsigned char CurrentDevive)

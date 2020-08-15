@@ -106,7 +106,8 @@ unsigned char checkRootHubConnections();
 
 void resetHubDevices(unsigned char hubindex);
 void pollHIDdevice();
-void FTDIReceive();
-void FTDISend();
+int8_t FTDIReceive(uint8_t *dst, uint8_t maxlen);
+int8_t FTDISend(const uint8_t *src, uint8_t len);
+uint8_t FTDIIsConnected();
 
 #endif
